@@ -302,6 +302,57 @@ async def get_tts(episode_id: str):
         logger.error(f"Error getting TTS: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/audio/{file_id}")
+async def stream_audio(file_id: str):
+    """Stream audio file from GridFS"""
+    try:
+        logger.info(f"Streaming audio file from GridFS: {file_id}")
+
+        # Get audio stream from GridFS
+        stream = service.cache_manager.stream_audio(file_id)
+        if not stream:
+            logger.warning(f"Audio file not found in GridFS: {file_id}")
+            raise HTTPException(status_code=404, detail="Audio file not found")
+
+        # Get metadata to determine content type
+        metadata = service.cache_manager.gridfs.get_audio_metadata(file_id)
+        content_type = metadata.get('content_type', 'audio/mpeg') if metadata else 'audio/mpeg'
+
+        # Stream the file
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            stream,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"inline; filename=audio_{file_id}.mp3"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error streaming audio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/transcript/{file_id}")
+async def get_transcript_by_id(file_id: str):
+    """Get transcript text from GridFS"""
+    try:
+        logger.info(f"Retrieving transcript from GridFS: {file_id}")
+
+        transcript_text = service.cache_manager.get_transcript_by_id(file_id)
+        if not transcript_text:
+            logger.warning(f"Transcript not found in GridFS: {file_id}")
+            raise HTTPException(status_code=404, detail="Transcript not found")
+
+        return {"transcript": transcript_text}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving transcript: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/tts/audio/{filename:path}")
 async def get_tts_audio(filename: str):
     try:

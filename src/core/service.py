@@ -420,54 +420,87 @@ Format as JSON:
                 print(f"Warning: Could not extract metadata: {e}")
                 display_title = title or url
             
-            # Step 1: Download or get cached audio
+            # Step 1: Download or get cached audio (stored in GridFS)
             print(f"\n{'='*50}")
             print(f"Processing episode: {display_title}")
             print(f"{'='*50}")
-            
+
             print("\n[Step 1/3] Audio Processing")
             print("-" * 20)
-            audio_path = None
-            
-            # Check cache first
-            cached_path = self.cache_manager.get_cached_download_path(url)
-            if cached_path and cached_path.exists():
-                print("✓ Using cached audio file")
-                audio_path = cached_path
+            audio_file_id = None
+            temp_audio_path = None
+
+            # Check GridFS cache first
+            cached_file_id = self.cache_manager.get_cached_download_path(url)
+            if cached_file_id:
+                print("✓ Using cached audio file from GridFS")
+                audio_file_id = cached_file_id
             else:
                 print("⌛ Downloading audio...")
-                audio_path = fetcher.download_episode(url, display_title)  # Pass the display_title to the fetcher
-                if audio_path:
-                    self.cache_manager.cache_download(url, audio_path)
-                print("✓ Download complete")
-            
-            if not audio_path:
+                temp_audio_path = fetcher.download_episode(url, display_title)
+                if temp_audio_path:
+                    print("⌛ Storing audio in GridFS...")
+                    audio_file_id = self.cache_manager.cache_download(url, temp_audio_path)
+                    print("✓ Audio stored in GridFS")
+
+            if not audio_file_id:
                 raise RuntimeError("Failed to get audio file")
             
-            # Step 2: Transcribe or get cached transcript
+            # Step 2: Transcribe or get cached transcript (stored in GridFS)
             print("\n[Step 2/3] Transcription")
             print("-" * 20)
             transcript = None
-            transcript_path = None
-            
-            # Check transcript cache
-            cached_transcript = self.cache_manager.get_cached_transcript_path(str(audio_path))
-            if cached_transcript and cached_transcript.exists():
-                print("✓ Using cached transcript")
-                transcript_path = cached_transcript
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    transcript_text = f.read()
-                transcript = {"text": transcript_text}
+            transcript_file_id = None
+
+            # Check transcript cache in GridFS
+            cached_transcript_text = self.cache_manager.get_cached_transcript_text(audio_file_id)
+            if cached_transcript_text:
+                print("✓ Using cached transcript from GridFS")
+                transcript = {"text": cached_transcript_text}
+                transcript_file_id = self.cache_manager.get_cached_transcript_path(audio_file_id)
             else:
+                # Need to transcribe - first get audio data from GridFS
+                if temp_audio_path:
+                    # Use the temp file we already downloaded
+                    transcribe_path = temp_audio_path
+                else:
+                    # Download from GridFS to temp file for transcription
+                    import tempfile
+                    audio_data = self.cache_manager.get_audio_by_id(audio_file_id)
+                    if not audio_data:
+                        raise RuntimeError("Failed to retrieve audio from GridFS")
+
+                    # Create temp file for transcription
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
+                        tmp.write(audio_data)
+                        transcribe_path = Path(tmp.name)
+
                 print("⌛ Transcribing audio (this may take a while)...")
-                transcript = self.transcriber.transcribe(audio_path)
+                transcript = self.transcriber.transcribe(transcribe_path)
+
                 if transcript:
-                    transcript_path = self.transcripts_dir / f"{file_hash}.txt"
-                    with open(transcript_path, 'w', encoding='utf-8') as f:
+                    # Store transcript in GridFS
+                    temp_transcript_path = self.transcripts_dir / f"{file_hash}.txt"
+                    temp_transcript_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(temp_transcript_path, 'w', encoding='utf-8') as f:
                         f.write(transcript['text'])
-                    self.cache_manager.cache_transcript(str(audio_path), transcript_path)
-                    print("✓ Transcription complete")
-            
+
+                    print("⌛ Storing transcript in GridFS...")
+                    transcript_file_id = self.cache_manager.cache_transcript(audio_file_id, temp_transcript_path)
+
+                    # Clean up temp transcript file
+                    temp_transcript_path.unlink(missing_ok=True)
+
+                    # Clean up temp audio file if we created one
+                    if not temp_audio_path and transcribe_path.exists():
+                        transcribe_path.unlink(missing_ok=True)
+
+                    print("✓ Transcription complete and stored in GridFS")
+
+            # Clean up temp audio file if exists
+            if temp_audio_path and temp_audio_path.exists():
+                temp_audio_path.unlink(missing_ok=True)
+
             if not transcript:
                 raise RuntimeError("Failed to get transcript")
             
@@ -531,15 +564,16 @@ Format as JSON:
             result = {
                 "id": str(uuid.uuid4()),
                 "url": url,
-                "title": display_title,  # Use original title for display
-                "file_hash": file_hash,  # Store file hash for reference
-                "audio_path": str(audio_path),
-                "transcript_path": str(transcript_path),
+                "title": display_title,
+                "file_hash": file_hash,
+                "audio_path": audio_file_id,  # GridFS file ID
+                "transcript_path": transcript_file_id,  # GridFS file ID
                 "summary_path": str(summary_path) if summary_path else None,
                 "processed_at": processed_at,
                 "duration": transcript.get("duration", 0),
                 "has_summary": bool(summary and summary_path),
-                "summary": summary
+                "summary": summary,
+                "transcript": transcript['text']  # Store full transcript in MongoDB
             }
             
             # Save to history

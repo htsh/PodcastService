@@ -3,7 +3,7 @@
 
 # Podcast Service
 
-A Python service that downloads, transcribes, and summarizes podcast episodes using MLX Whisper and LLM-based summarization.
+A Python service that downloads, transcribes, and summarizes podcast episodes using MLX Whisper and LLM-based summarization. All data is stored in MongoDB using GridFS for efficient large file storage.
 
 ## Features
 
@@ -11,10 +11,11 @@ A Python service that downloads, transcribes, and summarizes podcast episodes us
 - Automatic episode title extraction from webpage metadata
 - Transcribe audio using MLX Whisper (with automatic model download)
 - Generate comprehensive summaries using LLM
-- **MongoDB integration** for scalable data storage
+- **MongoDB with GridFS** for scalable data storage - all files in one database!
 - Track processed episodes to avoid duplicates
 - Multiple summary formats (key ideas, concepts, quotes, etc.)
 - Full-text search across episodes and transcripts
+- Audio streaming directly from MongoDB GridFS
 - Command-line interface for easy management
 - RESTful API with FastAPI
 - Secure API key management using environment variables
@@ -26,16 +27,17 @@ podcast_service/
 ├── config/               # Configuration settings
 ├── src/                 # Source code
 │   ├── core/           # Core functionality
+│   ├── db/             # MongoDB & GridFS integration
 │   ├── summarization/  # Summary generation
 │   ├── utils/         # Utility functions
-│   └── api/           # External API integration
-├── data/               # Data storage
-│   ├── downloads/     # Downloaded audio files
-│   ├── transcripts/   # Generated transcripts
-│   └── summaries/     # Generated summaries
-├── scripts/           # Utility scripts
+│   └── api/           # FastAPI application
+├── data/               # Local data storage (temp files only)
+│   └── summaries/     # Generated summaries (JSON)
+├── scripts/           # Utility & migration scripts
 └── tests/             # Test files
 ```
+
+**Note:** Audio files and transcripts are stored in MongoDB GridFS, not on the filesystem!
 
 ## Setup
 
@@ -99,9 +101,13 @@ docker run -d -p 27017:27017 --name mongodb mongo:latest
    ```
 
 5. **(Optional) Migrate existing data:**
-   If upgrading from the JSON-based version:
+   If upgrading from an older version:
    ```bash
+   # First migrate JSON data to MongoDB
    python scripts/migrate_to_mongodb.py
+
+   # Then migrate files from filesystem to GridFS
+   python scripts/migrate_files_to_gridfs.py
    ```
 
 6. Start the FastAPI server:
