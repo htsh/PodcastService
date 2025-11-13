@@ -11,10 +11,12 @@ import yt_dlp
 import requests
 import traceback
 
-from podcast_service.src.core.transcriber import Transcriber
-from podcast_service.src.core.podcast_fetcher import PodcastFetcher
-from podcast_service.src.summarization.summarizer import Summarizer
-from podcast_service.src.utils.cache_manager import CacheManager
+from src.core.transcriber import Transcriber
+from src.core.podcast_fetcher import PodcastFetcher
+from src.summarization.summarizer import Summarizer
+from src.utils.cache_manager import CacheManager
+from src.db import get_database, EpisodeRepository, SubscriptionRepository, SettingsRepository
+from src.db.models import Episode, Summary, Settings as SettingsModel
 from openai import OpenAI
 import io
 from tiktoken import get_encoding, encoding_for_model
@@ -29,64 +31,53 @@ class PodcastService:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Initialized PodcastService with data directory: {data_dir}")
-        
+
+        # Initialize MongoDB
+        self.db = get_database()
+        self.episode_repo = EpisodeRepository(self.db)
+        self.subscription_repo = SubscriptionRepository(self.db)
+        self.settings_repo = SettingsRepository(self.db)
+        logger.info("MongoDB repositories initialized")
+
         # Initialize OpenAI client
         self.openai_client = OpenAI()
-        
+
         # Initialize cache manager
-        self.cache_manager = CacheManager(self.data_dir / "cache")
-        
+        self.cache_manager = CacheManager(self.db)
+
         # Initialize podcast fetcher
         self.podcast_fetcher = PodcastFetcher()
-        
-        # Load settings
+
+        # Load settings from MongoDB
         self.settings = self._load_settings()
-        
+
         # Initialize components as None
         self.transcriber: Optional[Transcriber] = None
-        
+
         # Create necessary directories
         self.downloads_dir = self.data_dir / "downloads"
         self.transcripts_dir = self.data_dir / "transcripts"
         self.summaries_dir = self.data_dir / "summaries"
-        
+
         for directory in [self.downloads_dir, self.transcripts_dir, self.summaries_dir]:
             directory.mkdir(parents=True, exist_ok=True)
-        
+
         # Get model from environment
         self.llm_model = os.getenv("LLM_MODEL", "gpt-4")  # Use existing LLM_MODEL from config
         self.llm_max_tokens = int(os.getenv("LLM_MAX_TOKENS", "32000"))
         self.llm_temperature = float(os.getenv("LLM_TEMPERATURE", "0.8"))
         logger.info(f"Using LLM model: {self.llm_model} with max tokens: {self.llm_max_tokens}")
     
-    def _get_settings_file(self) -> Path:
-        return self.data_dir / "settings.json"
-    
-    def _get_history_file(self) -> Path:
-        return self.data_dir / "history.json"
-    
     def _load_settings(self) -> Dict:
-        """Load settings if exists, otherwise return defaults"""
-        settings_file = self._get_settings_file()
-        if settings_file.exists():
-            try:
-                with open(settings_file, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        
-        # Default settings
-        return {
-            "default_model": "base",
-            "output_format": "txt",
-            "auto_summarize": True
-        }
-    
+        """Load settings from MongoDB"""
+        settings_model = self.settings_repo.get()
+        return settings_model.to_dict()
+
     def _save_settings(self):
-        """Save current settings"""
-        with open(self._get_settings_file(), 'w') as f:
-            json.dump(self.settings, f)
-    
+        """Save current settings to MongoDB"""
+        settings_model = SettingsModel.from_dict(self.settings)
+        self.settings_repo.update(settings_model)
+
     def _initialize_transcriber(self):
         """Initialize transcriber with current settings if not already initialized"""
         if self.transcriber is None:
@@ -94,13 +85,14 @@ class PodcastService:
                 model_path=self.settings.get("default_model", "base"),
                 cache_manager=self.cache_manager
             )
-    
+
     def get_settings(self) -> Dict:
-        """Get current settings"""
+        """Get current settings from MongoDB"""
+        self.settings = self._load_settings()
         return self.settings
-    
+
     def update_settings(self, settings: Dict) -> bool:
-        """Update settings"""
+        """Update settings in MongoDB"""
         self.settings.update(settings)
         self._save_settings()
         return True
@@ -564,87 +556,57 @@ Format as JSON:
             raise RuntimeError(f"Failed to process episode: {e}")
     
     def get_history(self) -> List[Dict]:
-        """Get processing history"""
+        """Get processing history from MongoDB"""
         try:
-            history_file = self._get_history_file()
-            if not history_file.exists():
-                return []
-            
-            with open(history_file, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-            
-            # Validate file paths and load summaries
-            for entry in history:
-                # Validate transcript path
-                if 'transcript_path' in entry:
-                    transcript_path = entry['transcript_path']
-                    if transcript_path and Path(transcript_path).exists():
-                        entry['transcript_path'] = str(transcript_path)
-                    else:
-                        entry['transcript_path'] = None
-                
-                # Validate summary path and load summary
-                if 'summary_path' in entry:
-                    summary_path = entry['summary_path']
-                    if summary_path and Path(summary_path).exists():
-                        try:
-                            with open(summary_path, 'r', encoding='utf-8') as f:
-                                entry['summary'] = json.load(f)
-                                entry['has_summary'] = True
-                        except Exception as e:
-                            print(f"Error loading summary from {summary_path}: {e}")
-                            entry['summary_path'] = None
-                            entry['has_summary'] = False
-                            entry['summary'] = None
-                    else:
-                        entry['summary_path'] = None
-                        entry['has_summary'] = False
-                        entry['summary'] = None
-                
-                # Add ID if missing (for backward compatibility)
-                if 'id' not in entry:
-                    entry['id'] = str(uuid.uuid4())
-            
+            episodes = self.episode_repo.find_all()
+            history = []
+
+            for episode in episodes:
+                entry = episode.to_dict()
+
+                # Validate file paths if they exist
+                if entry.get('transcript_path') and not Path(entry['transcript_path']).exists():
+                    entry['transcript_path'] = None
+
+                if entry.get('summary_path') and not Path(entry['summary_path']).exists():
+                    entry['summary_path'] = None
+
+                history.append(entry)
+
             return history
-        except json.JSONDecodeError:
-            print("Error decoding history file")
-            return []
         except Exception as e:
-            print(f"Error reading history: {e}")
+            logger.error(f"Error reading history from MongoDB: {e}")
             return []
     
     def _save_to_history(self, result: Dict):
-        """Save processing result to history"""
+        """Save processing result to MongoDB"""
         try:
-            history_file = self._get_history_file()
-            
-            # Load existing history
-            history = []
-            if history_file.exists():
-                try:
-                    with open(history_file, 'r', encoding='utf-8') as f:
-                        history = json.load(f)
-                except (json.JSONDecodeError, Exception) as e:
-                    print(f"Error reading existing history: {e}")
-            
-            # Update existing entry or add new one
-            existing_entry_index = next(
-                (i for i, entry in enumerate(history) if entry['url'] == result['url']),
-                None
+            # Convert result dict to Episode model
+            summary_data = result.get('summary')
+            summary = Summary.from_dict(summary_data) if summary_data else None
+
+            episode = Episode(
+                url=result['url'],
+                title=result['title'],
+                file_hash=result['file_hash'],
+                audio_path=result['audio_path'],
+                transcript_path=result.get('transcript_path'),
+                summary_path=result.get('summary_path'),
+                processed_at=result['processed_at'],
+                duration=result.get('duration', 0),
+                has_summary=result.get('has_summary', False),
+                summary=summary,
+                subscription_id=result.get('subscription_id'),
+                subscription_type=result.get('subscription_type'),
+                metadata=result.get('metadata', {}),
+                id=result.get('id')
             )
-            
-            if existing_entry_index is not None:
-                # Update existing entry
-                history[existing_entry_index].update(result)
-            else:
-                # Add new entry
-                history.append(result)
-            
-            # Save updated history
-            with open(history_file, 'w', encoding='utf-8') as f:
-                json.dump(history, f, indent=2)
+
+            # Upsert to MongoDB
+            self.episode_repo.upsert(episode)
+            logger.info(f"Saved episode to MongoDB: {episode.title}")
         except Exception as e:
-            print(f"Error saving history: {e}")
+            logger.error(f"Error saving history to MongoDB: {e}")
             raise RuntimeError(f"Failed to save processing history: {e}")
 
     def _get_voice_for_language(self, lang_code: str) -> tuple[str, str]:
@@ -946,16 +908,18 @@ Format as JSON:
     def subscribe_to_podcast(self, podcast_id: str, feed_url: str, title: str = '') -> bool:
         """Subscribe to a podcast feed"""
         try:
-            subscription = {
-                'id': podcast_id,
-                'feed_url': feed_url,
-                'title': title,
-                'type': 'podcast'
-            }
-            self.cache_manager.save_subscription(subscription)
+            from src.db.models import Subscription
+            subscription = Subscription(
+                id=podcast_id,
+                feed_url=feed_url,
+                title=title,
+                type='podcast'
+            )
+            self.subscription_repo.create(subscription)
+            logger.info(f"Subscribed to podcast: {title}")
             return True
         except Exception as e:
-            print(f"Error subscribing to podcast: {e}")
+            logger.error(f"Error subscribing to podcast: {e}")
             return False
 
     def subscribe_to_youtube(self, channel_url: str) -> bool:
@@ -986,15 +950,16 @@ Format as JSON:
             print(f"✓ Got channel title: {channel_title}")
             
             print("\nStep 3: Saving subscription...")
-            subscription = {
-                'id': channel_id,
-                'url': channel_url,
-                'title': channel_title,
-                'type': 'youtube'
-            }
-            print(f"Subscription data: {json.dumps(subscription, indent=2)}")
-            
-            self.cache_manager.save_subscription(subscription)
+            from src.db.models import Subscription
+            subscription = Subscription(
+                id=channel_id,
+                url=channel_url,
+                title=channel_title,
+                type='youtube'
+            )
+            print(f"Subscription data: {subscription.to_dict()}")
+
+            self.subscription_repo.create(subscription)
             print("✓ Subscription saved successfully")
             return True
         except Exception as e:
@@ -1047,11 +1012,12 @@ Format as JSON:
         """Refresh episodes for all subscriptions"""
         print("Refreshing episodes...")
         try:
-            subscriptions = self.cache_manager.get_all_subscriptions()
+            subscriptions = self.subscription_repo.find_all()
+            subscription_dicts = [sub.to_dict() for sub in subscriptions]
             new_episodes = {'podcast': {}, 'youtube': {}}
             
-            for sub in subscriptions:
-                print(f"Processing subscription: {sub}")
+            for sub in subscription_dicts:
+                print(f"Processing subscription: {sub['title']}")
                 if sub['type'] == 'podcast':
                     print(f"Fetching episodes from feed: {sub['feed_url']}")
                     try:
@@ -1114,12 +1080,9 @@ Format as JSON:
                         print(f"Error fetching videos for channel {sub['id']}: {e}")
                         continue
             
-            # Save episodes to cache
-            try:
-                self.cache_manager.save_episodes(new_episodes)
-            except Exception as e:
-                print(f"Error saving episodes to cache: {e}")
-            
+            # Note: Episodes are now stored directly in MongoDB when processed
+            # No need to cache them separately
+
             print(f"Found {len(new_episodes['podcast'])} podcast episodes and {len(new_episodes['youtube'])} YouTube videos")
             return new_episodes
         except Exception as e:

@@ -3,7 +3,7 @@ from typing import Optional, Dict
 import os
 import mlx_whisper
 from huggingface_hub import hf_hub_download, snapshot_download
-from podcast_service.config.settings import WHISPER_MODEL_PATH
+from config.settings import WHISPER_MODEL_PATH
 
 class Transcriber:
     AVAILABLE_MODELS = {

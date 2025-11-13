@@ -6,6 +6,10 @@ from dotenv import load_dotenv
 env_path = Path(__file__).resolve().parent.parent / '.env'
 load_dotenv(env_path)
 
+# MongoDB settings
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "podcast_service")
+
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"

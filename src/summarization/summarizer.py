@@ -9,7 +9,7 @@ from langchain.prompts import PromptTemplate
 from langchain.chains.summarize import load_summarize_chain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-from podcast_service.src.summarization.templates import PODCAST_SUMMARY_TEMPLATE
+from src.summarization.templates import PODCAST_SUMMARY_TEMPLATE
 
 class Summarizer:
     def __init__(self, output_dir: Optional[Path] = None):

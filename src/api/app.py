@@ -8,8 +8,8 @@ import json
 import urllib.parse
 import logging
 
-from podcast_service.src.core.service import PodcastService
-from podcast_service.config.settings import DATA_DIR
+from src.core.service import PodcastService
+from config.settings import DATA_DIR
 
 app = FastAPI(title="Podcast Service API")
 

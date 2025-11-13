@@ -11,9 +11,12 @@ A Python service that downloads, transcribes, and summarizes podcast episodes us
 - Automatic episode title extraction from webpage metadata
 - Transcribe audio using MLX Whisper (with automatic model download)
 - Generate comprehensive summaries using LLM
+- **MongoDB integration** for scalable data storage
 - Track processed episodes to avoid duplicates
 - Multiple summary formats (key ideas, concepts, quotes, etc.)
+- Full-text search across episodes and transcripts
 - Command-line interface for easy management
+- RESTful API with FastAPI
 - Secure API key management using environment variables
 
 ## Project Structure
@@ -36,6 +39,36 @@ podcast_service/
 
 ## Setup
 
+### Prerequisites
+
+**MongoDB** - This application now uses MongoDB for data storage.
+
+**Install MongoDB:**
+
+**macOS (using Homebrew):**
+```bash
+brew tap mongodb/brew
+brew install mongodb-community
+brew services start mongodb-community
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
+echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+sudo apt-get update
+sudo apt-get install -y mongodb-org
+sudo systemctl start mongod
+sudo systemctl enable mongod
+```
+
+**Using Docker:**
+```bash
+docker run -d -p 27017:27017 --name mongodb mongo:latest
+```
+
+### Installation Steps
+
 1. Clone the repository:
    ```bash
    git clone <repository-url>
@@ -55,11 +88,23 @@ podcast_service/
 
 4. Set up environment variables:
    ```bash
-   # Run the interactive setup script
-   python scripts/setup_env.py
+   # Copy the template
+   cp .env.template .env
+
+   # Edit .env and configure:
+   # - OPENAI_API_KEY (required)
+   # - WHISPER_MODEL_PATH (required, e.g., 'large-v3')
+   # - MONGODB_URI (optional, defaults to mongodb://localhost:27017/)
+   # - MONGODB_DATABASE (optional, defaults to podcast_service)
    ```
 
-5. Start the FastAPI server:
+5. **(Optional) Migrate existing data:**
+   If upgrading from the JSON-based version:
+   ```bash
+   python scripts/migrate_to_mongodb.py
+   ```
+
+6. Start the FastAPI server:
    ```bash
    uvicorn src.api.app:app --reload
    ```
@@ -86,11 +131,18 @@ You can specify the model in three ways:
 
 The following environment variables can be configured in your `.env` file:
 
-- `OPENAI_API_KEY` (required): Your OpenAI API key
+**Required:**
+- `OPENAI_API_KEY`: Your OpenAI API key
 - `WHISPER_MODEL_PATH`: Model name or path (e.g., 'large-v3' or '/path/to/model')
-- `LLM_MODEL` (optional): LLM model to use (default: gpt-4)
-- `LLM_MAX_TOKENS` (optional): Maximum tokens for LLM (default: 4096)
-- `LLM_TEMPERATURE` (optional): LLM temperature setting (default: 0.8)
+
+**MongoDB Configuration (optional):**
+- `MONGODB_URI`: MongoDB connection string (default: `mongodb://localhost:27017/`)
+- `MONGODB_DATABASE`: Database name (default: `podcast_service`)
+
+**LLM Settings (optional):**
+- `LLM_MODEL`: LLM model to use (default: `gpt-4o`)
+- `LLM_MAX_TOKENS`: Maximum tokens for LLM (default: `32096`)
+- `LLM_TEMPERATURE`: LLM temperature setting (default: `0.8`)
 
 ## CLI Usage
 
@@ -219,14 +271,18 @@ for trans in transcriptions:
 
 ## Dependencies
 
+- **pymongo**: MongoDB database driver
+- **motor**: Async MongoDB driver for FastAPI
 - feedparser: RSS feed parsing
-- yt-dlp: Audio download
-- mlx-whisper: Audio transcription
-- langchain: LLM integration
+- yt-dlp: Audio download and YouTube support
+- mlx-whisper: Audio transcription (Apple Silicon optimized)
+- langchain: LLM integration framework
 - openai: OpenAI API client
 - python-dotenv: Environment variable management
 - beautifulsoup4: HTML parsing for title extraction
 - requests: HTTP client for webpage fetching
+- tiktoken: Token counting for GPT models
+- langdetect: Language detection for multi-language support
 
 ## API Usage
 
