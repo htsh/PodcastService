@@ -46,6 +46,11 @@ class Episode:
     subscription_type: Optional[str] = None  # 'podcast' or 'youtube'
     metadata: Dict[str, Any] = field(default_factory=dict)
     id: Optional[str] = None  # MongoDB _id as string
+    # Speaker diarization fields
+    transcript_segments: Optional[List[Dict]] = None  # Segments with speaker labels
+    speaker_count: Optional[int] = None
+    speakers: Optional[List[str]] = None
+    has_diarization: bool = False
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for MongoDB insertion"""
@@ -57,6 +62,7 @@ class Episode:
             'processed_at': self.processed_at,
             'duration': self.duration,
             'has_summary': self.has_summary,
+            'has_diarization': self.has_diarization,
             'metadata': self.metadata
         }
 
@@ -75,6 +81,13 @@ class Episode:
             data['subscription_type'] = self.subscription_type
         if self.id:
             data['id'] = self.id
+        # Diarization fields
+        if self.transcript_segments:
+            data['transcript_segments'] = self.transcript_segments
+        if self.speaker_count is not None:
+            data['speaker_count'] = self.speaker_count
+        if self.speakers:
+            data['speakers'] = self.speakers
 
         return data
 
@@ -99,7 +112,12 @@ class Episode:
             subscription_id=data.get('subscription_id'),
             subscription_type=data.get('subscription_type'),
             metadata=data.get('metadata', {}),
-            id=str(data.get('_id', '')) if data.get('_id') else data.get('id')
+            id=str(data.get('_id', '')) if data.get('_id') else data.get('id'),
+            # Diarization fields
+            transcript_segments=data.get('transcript_segments'),
+            speaker_count=data.get('speaker_count'),
+            speakers=data.get('speakers'),
+            has_diarization=data.get('has_diarization', False)
         )
 
 

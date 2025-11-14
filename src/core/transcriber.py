@@ -3,7 +3,7 @@ from typing import Optional, Dict
 import os
 import mlx_whisper
 from huggingface_hub import hf_hub_download, snapshot_download
-from config.settings import WHISPER_MODEL_PATH
+from config.settings import WHISPER_MODEL_PATH, ENABLE_DIARIZATION, HUGGINGFACE_TOKEN, MIN_SPEAKERS, MAX_SPEAKERS
 
 class Transcriber:
     AVAILABLE_MODELS = {
@@ -16,11 +16,33 @@ class Transcriber:
         'large-v3': 'mlx-community/whisper-large-v3-mlx'
     }
 
-    def __init__(self, model_path: str = WHISPER_MODEL_PATH, user_id: Optional[str] = None, cache_manager=None):
+    def __init__(
+        self,
+        model_path: str = WHISPER_MODEL_PATH,
+        user_id: Optional[str] = None,
+        cache_manager=None,
+        enable_diarization: bool = ENABLE_DIARIZATION
+    ):
         self.model_path = model_path
         self.user_id = user_id
         self.cache_manager = cache_manager
+        self.enable_diarization = enable_diarization
         self.model = self._get_model()
+
+        # Initialize diarizer if enabled
+        self.diarizer = None
+        if self.enable_diarization:
+            try:
+                from src.core.diarizer import Diarizer
+                self.diarizer = Diarizer(
+                    hf_token=HUGGINGFACE_TOKEN,
+                    min_speakers=MIN_SPEAKERS,
+                    max_speakers=MAX_SPEAKERS
+                )
+                print("Speaker diarization enabled")
+            except Exception as e:
+                print(f"Failed to initialize diarization (continuing without it): {e}")
+                self.enable_diarization = False
 
     def _download_model(self, model_name: str) -> str:
         """Download model from Hugging Face Hub."""
@@ -90,32 +112,73 @@ class Transcriber:
 
     def transcribe(self, audio_path: Path) -> Optional[Dict]:
         """
-        Transcribe an audio file using MLX Whisper.
+        Transcribe an audio file using MLX Whisper, with optional speaker diarization.
         Returns the transcription result or None if transcription fails.
+
+        Returns:
+            Dictionary with:
+            - text: str - Full transcript text
+            - segments: List[Dict] - (Optional) Segments with speaker labels if diarization enabled
+            - speakers: List[str] - (Optional) List of unique speakers if diarization enabled
+            - speaker_count: int - (Optional) Number of speakers if diarization enabled
+            - has_diarization: bool - Whether diarization was performed
         """
         try:
             print(f"Transcribing {audio_path}")
             try:
                 # Try the newer API
-                result = self.model.transcribe(str(audio_path))
+                result = mlx_whisper.transcribe(str(audio_path), path_or_hf_repo=self.model, verbose=True)
             except (AttributeError, TypeError):
-                # Try the older API
+                # Fallback to direct call
                 result = mlx_whisper.transcribe(
                     audio=str(audio_path),
                     path_or_hf_repo=self.model,
                     verbose=True
                 )
-            
+
+            # Perform diarization if enabled
+            diarization_result = None
+            if self.enable_diarization and self.diarizer:
+                diarization_result = self.diarizer.diarize(audio_path)
+
+            # Enhance result with diarization if available
+            if diarization_result and diarization_result.get('segments'):
+                # If Whisper returned segments with timestamps, align them with diarization
+                if result.get('segments'):
+                    aligned_segments = self.diarizer.align_transcript_with_diarization(
+                        result['segments'],
+                        diarization_result['segments']
+                    )
+                    result['segments'] = aligned_segments
+                else:
+                    # If no Whisper segments, just use diarization segments without text
+                    result['segments'] = diarization_result['segments']
+
+                result['speakers'] = diarization_result['speakers']
+                result['speaker_count'] = diarization_result['speaker_count']
+                result['has_diarization'] = True
+
+                # Create formatted transcript with speaker labels
+                formatted_transcript = self.diarizer.format_transcript_with_speakers(result['segments'])
+                if formatted_transcript:
+                    result['formatted_text'] = formatted_transcript
+            else:
+                result['has_diarization'] = False
+
             # Save transcription to user-specific directory
             transcript_path = self.get_output_path(audio_path)
             transcript_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
+            # Save the appropriate transcript version
+            transcript_to_save = result.get('formatted_text', result['text'])
             with open(transcript_path, 'w') as f:
-                f.write(result['text'])
-            
+                f.write(transcript_to_save)
+
             return result
         except Exception as e:
             print(f"Error transcribing {audio_path}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def transcribe_multiple(self, audio_paths: list[Path]) -> list[Dict]:

@@ -27,6 +27,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is not set. Please check your .env file.")
 
+# HuggingFace settings (for pyannote)
+HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
+
+# Speaker Diarization settings
+ENABLE_DIARIZATION = os.getenv("ENABLE_DIARIZATION", "true").lower() in ("true", "1", "yes")
+MIN_SPEAKERS = int(os.getenv("MIN_SPEAKERS")) if os.getenv("MIN_SPEAKERS") else None
+MAX_SPEAKERS = int(os.getenv("MAX_SPEAKERS")) if os.getenv("MAX_SPEAKERS") else None
+
 # LLM Settings
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "32096"))

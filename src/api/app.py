@@ -148,33 +148,78 @@ async def get_transcript(url: str):
     try:
         # Decode URL
         decoded_url = urllib.parse.unquote(url)
-        
+
         # Get history
         history = service.get_history()
-        
+
         # Find the episode
         episode = next((ep for ep in history if ep['url'] == decoded_url), None)
         if not episode:
             raise HTTPException(status_code=404, detail="Episode not found")
-        
+
         # Check if transcript exists
         if not episode.get('transcript_path') or not Path(episode['transcript_path']).exists():
             raise HTTPException(status_code=404, detail="Transcript not found")
-        
+
         # Load transcript
         try:
             with open(episode['transcript_path'], 'r', encoding='utf-8') as f:
                 transcript_text = f.read()
-            return {"transcript": transcript_text}
+
+            response = {"transcript": transcript_text}
+
+            # Add diarization data if available
+            if episode.get('has_diarization'):
+                response['has_diarization'] = True
+                response['speaker_count'] = episode.get('speaker_count', 0)
+                response['speakers'] = episode.get('speakers', [])
+                response['segments'] = episode.get('transcript_segments', [])
+            else:
+                response['has_diarization'] = False
+
+            return response
         except Exception as e:
             print(f"Error reading transcript file: {e}")
             raise HTTPException(status_code=500, detail="Error reading transcript file")
-            
+
     except HTTPException:
         raise
     except Exception as e:
         print(f"Error getting transcript: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/diarization/{url:path}")
+async def get_diarization(url: str):
+    """Get speaker diarization data for an episode"""
+    try:
+        # Decode URL
+        decoded_url = urllib.parse.unquote(url)
+
+        # Get history
+        history = service.get_history()
+
+        # Find the episode
+        episode = next((ep for ep in history if ep['url'] == decoded_url), None)
+        if not episode:
+            raise HTTPException(status_code=404, detail="Episode not found")
+
+        # Check if diarization exists
+        if not episode.get('has_diarization'):
+            raise HTTPException(status_code=404, detail="Diarization data not available for this episode")
+
+        # Return diarization data
+        return {
+            "has_diarization": True,
+            "speaker_count": episode.get('speaker_count', 0),
+            "speakers": episode.get('speakers', []),
+            "segments": episode.get('transcript_segments', [])
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting diarization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate_summary/{url:path}")
 async def generate_summary(

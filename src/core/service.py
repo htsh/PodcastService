@@ -575,6 +575,16 @@ Format as JSON:
                 "summary": summary,
                 "transcript": transcript['text']  # Store full transcript in MongoDB
             }
+
+            # Add diarization data if available
+            if transcript.get('has_diarization'):
+                result['has_diarization'] = True
+                result['transcript_segments'] = transcript.get('segments', [])
+                result['speaker_count'] = transcript.get('speaker_count', 0)
+                result['speakers'] = transcript.get('speakers', [])
+                print(f"✓ Speaker diarization: {transcript.get('speaker_count', 0)} speakers detected")
+            else:
+                result['has_diarization'] = False
             
             # Save to history
             self._save_to_history(result)
